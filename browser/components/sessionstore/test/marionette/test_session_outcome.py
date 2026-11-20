@@ -3,11 +3,13 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 import os
+import shutil
 import sys
 
 # add this directory to the path
 sys.path.append(os.path.dirname(__file__))
 
+from marionette_driver import Wait
 from session_store_test_case import SessionStoreTestCase
 
 
@@ -65,6 +67,53 @@ class TestSessionRestored(SessionOutcomeTestCase):
         self._quit_and_restore()
 
         self.assertEqual(self._read_outcome(), "restored")
+
+
+class TestRestoredLogsWindowCount(SessionOutcomeTestCase):
+    startup_prefs = {
+        "browser.sessionstore.loglevel": "Debug",
+        "browser.sessionstore.log.appender.file.logOnSuccess": True,
+    }
+
+    def setUp(self):
+        # Use the default test windows, so the session has several windows.
+        super().setUp(
+            startup_page=3,
+            include_private=False,
+            restore_on_demand=False,
+        )
+
+    def _log_dir(self):
+        return os.path.join(
+            self.marionette.instance.profile.profile, "sessionstore-logs"
+        )
+
+    def _read_logs(self):
+        if not os.path.isdir(self._log_dir()):
+            return ""
+        contents = ""
+        for entry in os.scandir(self._log_dir()):
+            with open(entry.path) as f:
+                contents += f.read()
+        return contents
+
+    def test_restoring_a_session_logs_the_total_window_count(self):
+        window_count = len(self.marionette.chrome_window_handles)
+        self.assertGreater(window_count, 1, "The session has several windows.")
+
+        self.marionette.quit()
+        shutil.rmtree(self._log_dir(), ignore_errors=True)
+        self.marionette.start_session()
+        self.marionette.set_context("chrome")
+
+        # Logs are flushed to disk once the restore is complete.
+        Wait(self.marionette, timeout=30).until(
+            lambda _: "windows restored" in self._read_logs(),
+            message="The restore should be logged.",
+        )
+        logs = self._read_logs()
+        self.assertIn(f"All {window_count} windows restored", logs)
+        self.assertIn(f"Session outcome: restored, {window_count} windows", logs)
 
 
 class TestNoWindows(SessionOutcomeTestCase):
